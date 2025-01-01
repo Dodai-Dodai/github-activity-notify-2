@@ -1,0 +1,34 @@
+name: Build and Push Multi-Arch Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: コードをチェックアウト
+        uses: actions/checkout@v3
+
+      - name: Docker Buildxをセットアップ
+        uses: docker/setup-buildx-action@v3
+
+      - name: Dockerログイン
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: QEMUをセットアップ
+        uses: docker/setup-qemu-action@v2
+
+      - name: マルチプラットフォームイメージをビルドしてプッシュ
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: dodaidodai/github-activity-notify-2:latest
