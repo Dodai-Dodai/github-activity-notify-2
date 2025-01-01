@@ -1,0 +1,4 @@
+export GITHUB_TOKEN="your_github_token"
+export GITHUB_USER="your_github_user"
+export DISCORD_BOT_TOKEN="your_discord_bot_token"
+export DISCORD_USER_ID="your_discord_user_id"
