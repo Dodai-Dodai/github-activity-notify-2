@@ -97,8 +97,27 @@ func main() {
 
 	yesterdayContribution := 0
 	todayContribution := 0
-	todayDate := time.Now().Format("2006-01-02")
-	yesterdayDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// ホストのタイムゾーンを取得（環境変数TZまたはシステムデフォルト）
+	var loc *time.Location
+	if tz := os.Getenv("TZ"); tz != "" {
+		var err error
+		loc, err = time.LoadLocation(tz)
+		if err != nil {
+			log.Printf("環境変数TZのタイムゾーン '%s' の読み込みに失敗、ローカルタイムゾーンを使用: %v", tz, err)
+			loc = time.Local
+		}
+	} else {
+		// 環境変数TZが設定されていない場合はローカルタイムゾーンを使用
+		loc = time.Local
+	}
+
+	now := time.Now().In(loc)
+	todayDate := now.Format("2006-01-02")
+	yesterdayDate := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+	fmt.Printf("使用中のタイムゾーン: %s\n", loc)
+	fmt.Printf("現在時刻: %s\n", now.Format("2006-01-02 15:04:05 MST"))
 
 	for _, week := range githubContribution.Data.User.ContributionsCollection.ContributionCalendar.Weeks {
 		for _, day := range week.ContributionDays {
