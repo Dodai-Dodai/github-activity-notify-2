@@ -132,17 +132,36 @@ func main() {
 		}
 	}
 
-	// 連続日数の計算（必要に応じて修正）
-	continueDays := 0
-	for _, week := range githubContribution.Data.User.ContributionsCollection.ContributionCalendar.Weeks {
-		for _, day := range week.ContributionDays {
-			if day.ContributionCount == 0 && day.Date != todayDate {
-				continueDays = 0
-			} else if day.Date == todayDate {
-				continueDays++
-			}
-		}
-	}
+    // 連続日数の計算（今日が0なら昨日までを起点にカウント）
+    // 日付 -> コントリビューション数 のマップを作成
+    contributionsByDate := make(map[string]int)
+    for _, week := range githubContribution.Data.User.ContributionsCollection.ContributionCalendar.Weeks {
+        for _, day := range week.ContributionDays {
+            contributionsByDate[day.Date] = day.ContributionCount
+        }
+    }
+
+    // 起点日を決定（今日が0なら昨日、そうでなければ今日から）
+    startDate := todayDate
+    if contributionsByDate[todayDate] == 0 {
+        startDate = yesterdayDate
+    }
+
+    // 連続日数を後ろ向きにカウント
+    continueDays := 0
+    current := startDate
+    for {
+        cnt, ok := contributionsByDate[current]
+        if !ok || cnt == 0 {
+            break
+        }
+        continueDays++
+        t, err := time.Parse("2006-01-02", current)
+        if err != nil {
+            break
+        }
+        current = t.AddDate(0, 0, -1).Format("2006-01-02")
+    }
 	fmt.Println("連続日数:", continueDays)
 	fmt.Println("今日のコントリビューション数:", todayContribution)
 	fmt.Println("昨日のコントリビューション数:", yesterdayContribution)
