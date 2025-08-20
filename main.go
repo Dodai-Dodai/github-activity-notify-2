@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -48,6 +49,12 @@ func init() {
 	DISCORD_USER_ID = os.Getenv("DISCORD_USER_ID")
 
 	if GITHUB_TOKEN == "" || GITHUB_USER == "" || DISCORD_BOT_TOKEN == "" || DISCORD_USER_ID == "" {
+		logError("missing_environment_variables", fmt.Errorf("required environment variables not set"), map[string]interface{}{
+			"github_token_set": GITHUB_TOKEN != "",
+			"github_user_set": GITHUB_USER != "",
+			"discord_bot_token_set": DISCORD_BOT_TOKEN != "",
+			"discord_user_id_set": DISCORD_USER_ID != "",
+		})
 		log.Fatal("必要な環境変数が設定されていません")
 	}
 
@@ -71,29 +78,69 @@ func init() {
 }
 
 func main() {
+	logInfo("application_started", map[string]interface{}{
+		"github_user": GITHUB_USER,
+		"timezone": getTimezone(),
+	})
+
 	// GitHub APIからコントリビューションデータを取得
 	requestBody, err := json.Marshal(map[string]string{"query": QUERY})
 	if err != nil {
+		logError("failed_to_marshal_request", err, map[string]interface{}{
+			"query_length": len(QUERY),
+		})
 		log.Fatal(err)
 	}
+
 	request, err := http.NewRequest("POST", URL, bytes.NewReader(requestBody))
 	if err != nil {
+		logError("failed_to_create_request", err, map[string]interface{}{
+			"url": URL,
+		})
 		log.Fatal(err)
 	}
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", GITHUB_TOKEN))
 	request.Header.Set("Content-Type", "application/json")
 
+	logInfo("github_api_request_start", map[string]interface{}{
+		"url": URL,
+		"user": GITHUB_USER,
+	})
+
 	client := new(http.Client)
 	response, err := client.Do(request)
 	if err != nil {
+		logError("github_api_request_failed", err, map[string]interface{}{
+			"url": URL,
+			"user": GITHUB_USER,
+		})
 		log.Fatal(err)
 	}
 	defer response.Body.Close()
 
+	// HTTPステータスコードのチェック
+	if response.StatusCode != http.StatusOK {
+		responseBody, _ := io.ReadAll(response.Body)
+		logError("github_api_bad_status", fmt.Errorf("HTTP %d", response.StatusCode), map[string]interface{}{
+			"status_code": response.StatusCode,
+			"response_body": string(responseBody),
+			"user": GITHUB_USER,
+		})
+		log.Fatalf("GitHub API returned status %d: %s", response.StatusCode, string(responseBody))
+	}
+
 	var githubContribution GithubContribution
 	if err := json.NewDecoder(response.Body).Decode(&githubContribution); err != nil {
+		logError("failed_to_decode_response", err, map[string]interface{}{
+			"status_code": response.StatusCode,
+		})
 		log.Fatal(err)
 	}
+
+	logInfo("github_api_response_received", map[string]interface{}{
+		"status_code": response.StatusCode,
+		"weeks_count": len(githubContribution.Data.User.ContributionsCollection.ContributionCalendar.Weeks),
+	})
 
 	yesterdayContribution := 0
 	todayContribution := 0
@@ -104,7 +151,10 @@ func main() {
 		var err error
 		loc, err = time.LoadLocation(tz)
 		if err != nil {
-			log.Printf("環境変数TZのタイムゾーン '%s' の読み込みに失敗、ローカルタイムゾーンを使用: %v", tz, err)
+			logError("timezone_load_failed", err, map[string]interface{}{
+				"requested_timezone": tz,
+				"fallback_to": "Local",
+			})
 			loc = time.Local
 		}
 	} else {
@@ -116,18 +166,28 @@ func main() {
 	todayDate := now.Format("2006-01-02")
 	yesterdayDate := now.AddDate(0, 0, -1).Format("2006-01-02")
 
-	fmt.Printf("使用中のタイムゾーン: %s\n", loc)
-	fmt.Printf("現在時刻: %s\n", now.Format("2006-01-02 15:04:05 MST"))
+	logInfo("timezone_info", map[string]interface{}{
+		"timezone": loc.String(),
+		"current_time": now.Format("2006-01-02 15:04:05 MST"),
+		"today_date": todayDate,
+		"yesterday_date": yesterdayDate,
+	})
 
 	for _, week := range githubContribution.Data.User.ContributionsCollection.ContributionCalendar.Weeks {
 		for _, day := range week.ContributionDays {
 			if day.Date == yesterdayDate {
-				fmt.Println("昨日:", day.Date, day.ContributionCount)
 				yesterdayContribution = day.ContributionCount
+				logInfo("yesterday_contribution_found", map[string]interface{}{
+					"date": day.Date,
+					"contribution_count": day.ContributionCount,
+				})
 			}
 			if day.Date == todayDate {
-				fmt.Println("今日:", day.Date, day.ContributionCount)
 				todayContribution = day.ContributionCount
+				logInfo("today_contribution_found", map[string]interface{}{
+					"date": day.Date,
+					"contribution_count": day.ContributionCount,
+				})
 			}
 		}
 	}
@@ -162,9 +222,13 @@ func main() {
 		}
 		current = t.AddDate(0, 0, -1).Format("2006-01-02")
 	}
-	fmt.Println("連続日数:", continueDays)
-	fmt.Println("今日のコントリビューション数:", todayContribution)
-	fmt.Println("昨日のコントリビューション数:", yesterdayContribution)
+
+	logInfo("contribution_summary", map[string]interface{}{
+		"continue_days": continueDays,
+		"today_contribution": todayContribution,
+		"yesterday_contribution": yesterdayContribution,
+		"start_date": startDate,
+	})
 
 	// DiscordにDMを送信
 	message := fmt.Sprintf("昨日のコントリビューション数: %d", yesterdayContribution)
@@ -177,11 +241,24 @@ func main() {
 	if todayContribution > 0 {
 		message += fmt.Sprintf("\nおつかれさまでした: %d", todayContribution)
 	}
+	logInfo("sending_discord_message", map[string]interface{}{
+		"message_length": len(message),
+		"today_contribution": todayContribution,
+		"yesterday_contribution": yesterdayContribution,
+		"continue_days": continueDays,
+	})
+
 	err = sendDiscordDM(message)
 	if err != nil {
-		log.Printf("Discord DMの送信に失敗しました: %v", err)
+		logError("discord_dm_send_failed", err, map[string]interface{}{
+			"message_length": len(message),
+			"discord_user_id": DISCORD_USER_ID,
+		})
 	} else {
-		log.Println("Discord DMを送信しました")
+		logInfo("discord_dm_sent_successfully", map[string]interface{}{
+			"message_length": len(message),
+			"discord_user_id": DISCORD_USER_ID,
+		})
 	}
 }
 
@@ -199,25 +276,85 @@ func initDiscord() error {
 }
 
 func sendDiscordDM(content string) error {
+	logInfo("discord_session_init_start", nil)
+	
 	// 初回のみセッションを初期化
 	if discordSession == nil {
 		if err := initDiscord(); err != nil {
+			logError("discord_session_init_failed", err, map[string]interface{}{
+				"bot_token_length": len(DISCORD_BOT_TOKEN),
+			})
 			return err
 		}
 		defer discordSession.Close()
 	}
 
+	logInfo("discord_dm_channel_create_start", map[string]interface{}{
+		"user_id": DISCORD_USER_ID,
+	})
+
 	// ユーザーとのDMチャンネルを作成
 	channel, err := discordSession.UserChannelCreate(DISCORD_USER_ID)
 	if err != nil {
+		logError("discord_dm_channel_create_failed", err, map[string]interface{}{
+			"user_id": DISCORD_USER_ID,
+		})
 		return fmt.Errorf("DMチャンネルの作成に失敗: %w", err)
 	}
+
+	logInfo("discord_message_send_start", map[string]interface{}{
+		"channel_id": channel.ID,
+		"message_length": len(content),
+	})
 
 	// メッセージを送信
 	_, err = discordSession.ChannelMessageSend(channel.ID, content)
 	if err != nil {
+		logError("discord_message_send_failed", err, map[string]interface{}{
+			"channel_id": channel.ID,
+			"message_length": len(content),
+		})
 		return fmt.Errorf("メッセージの送信に失敗: %w", err)
 	}
 
 	return nil
+}
+
+// 構造化ログ用のヘルパー関数
+func logInfo(event string, data map[string]interface{}) {
+	logEntry := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"level":     "INFO",
+		"event":     event,
+	}
+	if data != nil {
+		for k, v := range data {
+			logEntry[k] = v
+		}
+	}
+	jsonBytes, _ := json.Marshal(logEntry)
+	fmt.Println(string(jsonBytes))
+}
+
+func logError(event string, err error, data map[string]interface{}) {
+	logEntry := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"level":     "ERROR",
+		"event":     event,
+		"error":     err.Error(),
+	}
+	if data != nil {
+		for k, v := range data {
+			logEntry[k] = v
+		}
+	}
+	jsonBytes, _ := json.Marshal(logEntry)
+	fmt.Println(string(jsonBytes))
+}
+
+func getTimezone() string {
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	return "Local"
 }
